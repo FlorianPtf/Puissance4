@@ -1,0 +1,388 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Puissance 4</title>
+<style>
+:root {
+  --cell-size: 90px;
+  --gap: 10px;
+  --cols: 7;
+  --rows: 6;
+  --board-bg: #0f62fe;
+  --hole-bg: #06213a;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 20px;
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  background: #071024;
+  color: #e6eef8;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+h1 { margin: 0 0 12px 0; font-size: 20px; letter-spacing: 0.2px; }
+#status { margin-bottom: 12px; font-size: 16px; }
+#status .player { font-weight: 700; margin-left: 6px; }
+
+#board-container { position: relative; }
+
+#board {
+  display: grid;
+  grid-template-columns: repeat(var(--cols), var(--cell-size));
+  grid-auto-rows: var(--cell-size);
+  gap: var(--gap);
+  padding: var(--gap);
+  background: linear-gradient(180deg, #0b4fd6, var(--board-bg));
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(2,6,23,0.7);
+  user-select: none;
+}
+.cell {
+  width: var(--cell-size);
+  height: var(--cell-size);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  position: relative;
+}
+.hole {
+  width: calc(var(--cell-size) - 14px);
+  height: calc(var(--cell-size) - 14px);
+  border-radius: 50%;
+  background: var(--hole-bg);
+  box-shadow: inset 0 -6px 16px rgba(0,0,0,0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.disc {
+  width: 84%;
+  height: 84%;
+  border-radius: 50%;
+  box-shadow: inset 0 -6px 18px rgba(0,0,0,0.35);
+  transform: translateY(0);
+  transition: transform 120ms ease;
+}
+.disc.red { background: radial-gradient(circle at 30% 30%, #ff6868, #c80000); }
+.disc.yellow { background: radial-gradient(circle at 30% 30%, #fff07a, #c6a700); }
+
+#board.hide-static .disc { opacity: 0; transition: opacity 150ms linear; }
+
+.floating-disc {
+  position: absolute;
+  width: var(--cell-size);
+  height: var(--cell-size);
+  border-radius: 50%;
+  margin: 0;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  z-index: 50;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.6), inset 0 -6px 18px rgba(0,0,0,0.25);
+}
+.floating-disc.red { background: radial-gradient(circle at 30% 30%, #ff6868, #c80000); }
+.floating-disc.yellow { background: radial-gradient(circle at 30% 30%, #fff07a, #c6a700); }
+
+.controls { margin-top: 14px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+button { background: #0b74ff; color: white; border: 0; padding: 10px 14px; border-radius: 8px; cursor: pointer; font-weight: 600; }
+button.secondary { background: #f59e0b; color: #081124; }
+button.danger { background: #ef4444; }
+button.used { opacity: 0.4; cursor: not-allowed; }
+
+#message { margin-top: 10px; font-size: 16px; font-weight: 700; }
+
+@media (max-width:700px){ :root{ --cell-size:48px; --gap:6px; } h1{ font-size:18px; } }
+</style>
+</head>
+<body>
+  <h1>Puissance 4</h1>
+  <div id="status">Tour du joueur : <span id="player" class="player">Rouge 🔴</span></div>
+
+  <div id="board-container">
+    <div id="board" aria-label="Plateau Puissance 4"></div>
+  </div>
+
+  <div class="controls">
+    <!-- 🔴🟡 NOUVEAU : deux boutons distincts -->
+    <button id="flip-red-btn" class="secondary">🔄 Retournement Rouge 🔴</button>
+    <button id="flip-yellow-btn" class="secondary">🔄 Retournement Jaune 🟡</button>
+    <button id="reset-btn" class="danger" style="display:none">🔁 Rejouer</button>
+  </div>
+
+  <div id="message" aria-live="polite"></div>
+
+<script>
+/* ---------- CONFIG ---------- */
+const ROWS = 6;
+const COLS = 7;
+
+/* ---------- STATE ---------- */
+let board = [];
+let currentPlayer = 'red';
+let animating = false;
+let gameOver = false;
+
+/* ---------- NEW: tracking flip usage ---------- */
+let flipUsed = { red: false, yellow: false };
+
+/* ---------- DOM ---------- */
+const boardEl = document.getElementById('board');
+const containerEl = document.getElementById('board-container');
+const playerEl = document.getElementById('player');
+const flipRedBtn = document.getElementById('flip-red-btn');
+const flipYellowBtn = document.getElementById('flip-yellow-btn');
+const resetBtn = document.getElementById('reset-btn');
+const messageEl = document.getElementById('message');
+
+/* ---------- INIT ---------- */
+function init(){
+  board = Array.from({length: ROWS}, ()=> Array(COLS).fill(null));
+  currentPlayer = 'red';
+  animating = false;
+  gameOver = false;
+  flipUsed = { red: false, yellow: false }; // reset usage
+  messageEl.textContent = '';
+  resetBtn.style.display = 'none';
+  flipRedBtn.classList.remove('used');
+  flipYellowBtn.classList.remove('used');
+  updateFlipButtons();
+  updatePlayerText();
+  render();
+}
+init();
+
+/* ---------- RENDER ---------- */
+function render(){
+  boardEl.innerHTML = '';
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<COLS;c++){
+      const cell = document.createElement('div');
+      cell.className = 'cell';
+      cell.dataset.row = r;
+      cell.dataset.col = c;
+
+      const hole = document.createElement('div');
+      hole.className = 'hole';
+
+      if(board[r][c]){
+        const disc = document.createElement('div');
+        disc.className = 'disc ' + board[r][c];
+        hole.appendChild(disc);
+      }
+
+      cell.appendChild(hole);
+      cell.addEventListener('click', ()=> onColumnClick(c));
+      boardEl.appendChild(cell);
+    }
+  }
+}
+
+/* ---------- HELPERS ---------- */
+function findDropRow(col){
+  for(let r = ROWS - 1; r >= 0; r--) if(board[r][col] === null) return r;
+  return -1;
+}
+
+/* ---------- DROP ---------- */
+function onColumnClick(col){
+  if(animating || gameOver) return;
+  const targetRow = findDropRow(col);
+  if(targetRow === -1) return;
+  animateDrop(targetRow, col, currentPlayer);
+}
+
+function animateDrop(targetRow, col, color){
+  animating = true;
+  const allCells = boardEl.children;
+  const firstCell = allCells[col];
+  const targetCell = allCells[targetRow * COLS + col];
+  const containerRect = containerEl.getBoundingClientRect();
+  const firstRect = firstCell.getBoundingClientRect();
+  const targetRect = targetCell.getBoundingClientRect();
+
+  const centerX = (firstRect.left - containerRect.left) + firstRect.width/2;
+  const startY = (firstRect.top - containerRect.top) - firstRect.height*0.9;
+  const targetY = (targetRect.top - containerRect.top) + targetRect.height/2;
+
+  const f = document.createElement('div');
+  f.className = 'floating-disc ' + color;
+  f.style.left = centerX + 'px';
+  f.style.top = startY + 'px';
+
+  const rowsToFall = Math.abs(targetY - startY) / targetRect.height;
+  const duration = Math.min(900, Math.max(220, Math.round(120 + 110 * rowsToFall)));
+  f.style.transition = `top ${duration}ms cubic-bezier(0.22,1,0.36,1)`;
+
+  containerEl.appendChild(f);
+  f.getBoundingClientRect();
+  requestAnimationFrame(()=> { f.style.top = targetY + 'px'; });
+
+  const onEnd = (e) => {
+    if(e.propertyName !== 'top') return;
+    f.removeEventListener('transitionend', onEnd);
+    board[targetRow][col] = color;
+    setTimeout(()=> {
+      f.remove();
+      render();
+      animating = false;
+      if(checkWinAt(targetRow, col, color)){
+        gameOver = true;
+        messageEl.innerHTML = `🎉 Victoire : <strong>${color === 'red' ? 'Rouge 🔴' : 'Jaune 🟡'}</strong>`;
+        resetBtn.style.display = 'inline-block';
+        return;
+      }
+      currentPlayer = (currentPlayer === 'red') ? 'yellow' : 'red';
+      updatePlayerText();
+      updateFlipButtons();
+    }, 40);
+  };
+  f.addEventListener('transitionend', onEnd);
+}
+
+/* ---------- WIN CHECK ---------- */
+function checkWinAt(r, c, color){
+  const dirs = [[0,1],[1,0],[1,1],[1,-1]];
+  for(const [dr,dc] of dirs){
+    let count = 1;
+    for(let k=1;k<4;k++){
+      const nr = r + dr*k, nc = c + dc*k;
+      if(nr<0||nr>=ROWS||nc<0||nc>=COLS) break;
+      if(board[nr][nc] === color) count++; else break;
+    }
+    for(let k=1;k<4;k++){
+      const nr = r - dr*k, nc = c - dc*k;
+      if(nr<0||nr>=ROWS||nc<0||nc>=COLS) break;
+      if(board[nr][nc] === color) count++; else break;
+    }
+    if(count >= 4) return true;
+  }
+  return false;
+}
+
+/* ---------- FLIP ---------- */
+function computeFlipResult(){
+  const newBoard = Array.from({length: ROWS}, ()=> Array(COLS).fill(null));
+  const mappings = [];
+
+  for(let col=0; col<COLS; col++){
+    const origPieces = [];
+    for(let r=0;r<ROWS;r++){
+      if(board[r][col]) origPieces.push({r, color: board[r][col]});
+    }
+    const newOrder = origPieces.slice().reverse();
+    const pcount = newOrder.length;
+    for(let i=0;i<pcount;i++){
+      const entry = newOrder[i];
+      const targetRow = ROWS - pcount + i;
+      newBoard[targetRow][col] = entry.color;
+      mappings.push({ origRow: entry.r, col, color: entry.color, targetRow });
+    }
+  }
+  return { newBoard, mappings };
+}
+
+function flipBoardAnimated(player){
+  if(animating || gameOver) return;
+  if(flipUsed[player]) return; // déjà utilisé
+  if(currentPlayer !== player) return; // pas ton tour
+
+  flipUsed[player] = true;
+  updateFlipButtons();
+
+  const { newBoard, mappings } = computeFlipResult();
+  const toMove = mappings.filter(m => m.origRow !== m.targetRow);
+  if(toMove.length === 0){
+    board = newBoard;
+    render();
+    checkWinAfterFlip();
+    return;
+  }
+
+  animating = true;
+  const allCells = boardEl.children;
+  const containerRect = containerEl.getBoundingClientRect();
+
+  const floatingEls = [];
+  toMove.forEach(m=>{
+    const origIndex = m.origRow * COLS + m.col;
+    const targetIndex = m.targetRow * COLS + m.col;
+    const origRect = allCells[origIndex].getBoundingClientRect();
+    const targetRect = allCells[targetIndex].getBoundingClientRect();
+
+    floatingEls.push({
+      mapping: m,
+      startX: (origRect.left - containerRect.left) + origRect.width/2,
+      startY: (origRect.top - containerRect.top) + origRect.height/2,
+      tX: (targetRect.left - containerRect.left) + targetRect.width/2,
+      tY: (targetRect.top - containerRect.top) + targetRect.height/2,
+      deltaRows: Math.abs(m.targetRow - m.origRow)
+    });
+  });
+
+  boardEl.classList.add('hide-static');
+
+  let pending = floatingEls.length;
+  floatingEls.forEach(finfo=>{
+    const f = document.createElement('div');
+    f.className = 'floating-disc ' + finfo.mapping.color;
+    f.style.left = finfo.startX + 'px';
+    f.style.top = finfo.startY + 'px';
+    const duration = Math.min(900, Math.max(220, Math.round(150 + 110 * finfo.deltaRows)));
+    f.style.transition = `top ${duration}ms cubic-bezier(0.22,1,0.36,1), left ${duration}ms linear`;
+
+    containerEl.appendChild(f);
+    f.getBoundingClientRect();
+    requestAnimationFrame(()=> { f.style.top = finfo.tY + 'px'; f.style.left = finfo.tX + 'px'; });
+
+    f.addEventListener('transitionend', (e)=>{
+      if(e.propertyName !== 'top') return;
+      f.remove();
+      if(--pending === 0){
+        board = newBoard;
+        render();
+        boardEl.classList.remove('hide-static');
+        animating = false;
+        checkWinAfterFlip();
+      }
+    });
+  });
+}
+
+/* ---------- WIN AFTER FLIP ---------- */
+function checkWinAfterFlip(){
+  for(let r=0;r<ROWS;r++){
+    for(let c=0;c<COLS;c++){
+      if(board[r][c] && checkWinAt(r,c,board[r][c])){
+        gameOver = true;
+        messageEl.innerHTML = `🎉 Victoire : <strong>${board[r][c] === 'red' ? 'Rouge 🔴' : 'Jaune 🟡'}</strong>`;
+        resetBtn.style.display = 'inline-block';
+        return;
+      }
+    }
+  }
+}
+
+/* ---------- UI HELPERS ---------- */
+function updatePlayerText(){
+  playerEl.textContent = currentPlayer === 'red' ? 'Rouge 🔴' : 'Jaune 🟡';
+}
+function updateFlipButtons(){
+  flipRedBtn.disabled = gameOver || flipUsed.red || currentPlayer !== 'red';
+  flipYellowBtn.disabled = gameOver || flipUsed.yellow || currentPlayer !== 'yellow';
+  flipRedBtn.classList.toggle('used', flipUsed.red);
+  flipYellowBtn.classList.toggle('used', flipUsed.yellow);
+}
+
+/* ---------- RESET ---------- */
+function resetGame(){ init(); }
+
+/* ---------- EVENTS ---------- */
+flipRedBtn.addEventListener('click', ()=> flipBoardAnimated('red'));
+flipYellowBtn.addEventListener('click', ()=> flipBoardAnimated('yellow'));
+resetBtn.addEventListener('click', resetGame);
+</script>
+</body>
+</html>
